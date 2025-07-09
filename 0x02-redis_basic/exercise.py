@@ -113,29 +113,29 @@ class Cache:
         """
         return self.get(key, fn=int)
 
-    def replay(method: Callable) -> None:
-        """
-        Display the history of calls for a particular method.
-        
-        Args:
-            method (Callable): The method whose call history is to be displayed.
-        """
-        redis_instance = method.__self__._redis
-        qualname = method.__qualname__
-    
-        # Get call count
-        count = redis_instance.get(qualname)
-        try:
-            count = int(count.decode("utf-8")) if count else 0
-        except Exception:
-            count = 0
-    
-        print(f"{qualname} was called {count} times:")
-    
-        # Get inputs and outputs
-        inputs = redis_instance.lrange(f"{qualname}:inputs", 0, -1)
-        outputs = redis_instance.lrange(f"{qualname}:outputs", 0, -1)
-    
-        for inp, out in zip(inputs, outputs):
-            print(f"{qualname}(*{inp.decode('utf-8')}) -> {out.decode('utf-8')}")
-    
+
+def replay(method: Callable) -> None:
+    """
+    Display the history of calls for a particular method.
+
+    Args:
+        method (Callable): The method whose call history is to be displayed.
+    """
+    redis_instance = method.__self__._redis
+    qualname = method.__qualname__
+
+    # Get call count
+    count = redis_instance.get(qualname)
+    try:
+        count = int(count.decode("utf-8")) if count else 0
+    except Exception:
+        count = 0
+
+    print(f"{qualname} was called {count} times:")
+
+    # Get inputs and outputs
+    inputs = redis_instance.lrange(f"{qualname}:inputs", 0, -1)
+    outputs = redis_instance.lrange(f"{qualname}:outputs", 0, -1)
+
+    for inp, out in zip(inputs, outputs):
+        print(f"{qualname}(*{inp.decode('utf-8')}) -> {out.decode('utf-8')}")

@@ -1,47 +1,46 @@
 #!/usr/bin/env python3
 """
-This module provides a function to fetch web pages with caching and tracking.
-Each URL's access count is tracked and its content is cached for 10 seconds.
+Module that implements a web cache and tracker using Redis.
+Caches page HTML for 10 seconds and tracks access count for each URL.
 """
 
-import requests
 import redis
-from typing import Callable
+import requests
 from functools import wraps
+from typing import Callable
 
-# Create a Redis client
+# Redis connection
 redis_client = redis.Redis()
 
 
-def cache_page(func: Callable) -> Callable:
+def count_access(method: Callable) -> Callable:
     """
-    Decorator that caches the result of a web page fetch for 10 seconds
-    and tracks the number of times each URL was accessed.
+    Decorator that tracks how many times a URL has been accessed.
+    Increments 'count:{url}' every time the function is called.
     """
 
-    @wraps(func)
+    @wraps(method)
     def wrapper(url: str) -> str:
-        count_key = f"count:{url}"
-        redis_client.incr(count_key)
+        redis_client.incr(f"count:{url}")
+        cached = redis_client.get(url)
 
-        cached_html = redis_client.get(url)
-        if cached_html:
-            return cached_html.decode("utf-8")
+        if cached:
+            return cached.decode('utf-8')
 
-        html = func(url)
-        redis_client.setex(url, 10, html)
-        return html
+        result = method(url)
+        redis_client.setex(url, 10, result)
+        return result
 
     return wrapper
 
 
-@cache_page
+@count_access
 def get_page(url: str) -> str:
     """
-    Fetch the HTML content of the specified URL.
+    Retrieve the HTML content of a URL, with caching and access tracking.
 
     Args:
-        url (str): The URL to fetch.
+        url (str): The URL to retrieve.
 
     Returns:
         str: The HTML content of the page.

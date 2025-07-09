@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 This module defines a Cache class that interfaces with a Redis database
-to store and retrieve arbitrary data, track method call counts,
-and log input/output history for decorated methods.
+to store and retrieve data, count method calls, track input/output history,
+and replay call history for decorated methods.
 """
 
 import redis
@@ -18,8 +18,7 @@ def count_calls(method: Callable) -> Callable:
     """
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        key = method.__qualname__
-        self._redis.incr(key)
+        self._redis.incr(method.__qualname__)
         return method(self, *args, **kwargs)
     return wrapper
 
@@ -27,7 +26,7 @@ def count_calls(method: Callable) -> Callable:
 def call_history(method: Callable) -> Callable:
     """
     Decorator that stores the history of inputs and outputs for a function.
-    Saves to Redis lists using keys <method_name>:inputs and <method_name>:outputs
+    Saves to Redis lists using keys <method_name>:inputs and <method_name>:outputs.
     """
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
@@ -36,9 +35,8 @@ def call_history(method: Callable) -> Callable:
 
         self._redis.rpush(input_key, str(args))
         result = method(self, *args, **kwargs)
-        self._redis.rpush(output_key, result)
+        self._redis.rpush(output_key, str(result))
         return result
-
     return wrapper
 
 
@@ -71,7 +69,10 @@ class Cache:
         self._redis.set(key, data)
         return key
 
-    def get(self, key: str, fn: Optional[Callable] = None) -> Union[bytes, str, int, float, None]:
+    def get(self,
+            key: str,
+            fn: Optional[Callable] = None
+            ) -> Union[bytes, str, int, float, None]:
         """
         Retrieve the value from Redis using the given key and convert it using fn.
 
@@ -85,9 +86,7 @@ class Cache:
         value = self._redis.get(key)
         if value is None:
             return None
-        if fn:
-            return fn(value)
-        return value
+        return fn(value) if fn else value
 
     def get_str(self, key: str) -> Optional[str]:
         """
@@ -124,16 +123,10 @@ def replay(method: Callable) -> None:
     redis_instance = method.__self__._redis
     qualname = method.__qualname__
 
-    # Get call count
-    count = redis_instance.get(qualname)
-    try:
-        count = int(count.decode("utf-8")) if count else 0
-    except Exception:
-        count = 0
+    call_count = redis_instance.get(qualname)
+    call_count = int(call_count.decode("utf-8")) if call_count else 0
+    print(f"{qualname} was called {call_count} times:")
 
-    print(f"{qualname} was called {count} times:")
-
-    # Get inputs and outputs
     inputs = redis_instance.lrange(f"{qualname}:inputs", 0, -1)
     outputs = redis_instance.lrange(f"{qualname}:outputs", 0, -1)
 

@@ -2,17 +2,32 @@
 """
 This module defines a Cache class that interfaces with a Redis database
 to store and retrieve arbitrary data using randomly generated keys.
+It includes support for tracking method call counts.
 """
 
 import redis
 import uuid
+import functools
 from typing import Union, Callable, Optional
+
+
+def count_calls(method: Callable) -> Callable:
+    """
+    Decorator that counts how many times a method is called.
+    Uses Redis to persist the count, keyed by the method's qualified name.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        key = method.__qualname__
+        self._redis.incr(key)
+        return method(self, *args, **kwargs)
+    return wrapper
 
 
 class Cache:
     """
     Cache class to interact with a Redis database.
-    It allows storing of data using generated keys.
+    It allows storing and retrieving data and tracking call counts.
     """
 
     def __init__(self) -> None:
@@ -22,6 +37,7 @@ class Cache:
         self._redis = redis.Redis()
         self._redis.flushdb()
 
+    @count_calls
     def store(self, data: Union[str, bytes, int, float]) -> str:
         """
         Generate a random key, store the given data in Redis, and return the key.

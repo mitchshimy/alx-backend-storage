@@ -1,92 +1,134 @@
 #!/usr/bin/env python3
 """
-Redis basic operations module
+This module defines a Cache class that interfaces with a Redis database
+to store and retrieve data, count method calls, track input/output history,
+and replay call history for decorated methods.
 """
+
 import redis
 import uuid
+import functools
 from typing import Union, Callable, Optional
-from functools import wraps
 
 
 def count_calls(method: Callable) -> Callable:
-    """Decorator to count method calls"""
-    @wraps(method)
+    """
+    Decorator that counts how many times a method is called.
+    Uses Redis to persist the count, keyed by the method's qualified name.
+    """
+    @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        """Wrapper function that increments call count"""
         self._redis.incr(method.__qualname__)
         return method(self, *args, **kwargs)
     return wrapper
 
 
 def call_history(method: Callable) -> Callable:
-    """Decorator to store history of inputs and outputs"""
-    @wraps(method)
+    """
+    Decorator that stores the history of inputs and outputs for a function.
+    Saves to Redis lists using keys <method_name>:inputs and <method_name>:outputs.
+    """
+    @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        """Wrapper function that stores input/output history"""
-        input_key = f"{method.__qualname__}:inputs"
-        output_key = f"{method.__qualname__}:outputs"
-        
-        # Store input
+        input_key = method.__qualname__ + ":inputs"
+        output_key = method.__qualname__ + ":outputs"
+
         self._redis.rpush(input_key, str(args))
-        
-        # Execute method and store output
-        output = method(self, *args, **kwargs)
-        self._redis.rpush(output_key, str(output))
-        
-        return output
+        result = method(self, *args, **kwargs)
+        self._redis.rpush(output_key, str(result))
+        return result
     return wrapper
 
 
-def replay(method: Callable) -> None:
-    """Display the history of calls of a particular function"""
-    # Access Redis instance from the Cache class, assuming method is Cache.store
-    redis_instance = method.__self__._redis  # Use the Redis instance from the Cache class
-    input_key = f"{method.__qualname__}:inputs"
-    output_key = f"{method.__qualname__}:outputs"
-    
-    inputs = redis_instance.lrange(input_key, 0, -1)
-    outputs = redis_instance.lrange(output_key, 0, -1)
-    
-    call_count = len(inputs)
-    if call_count == 0:
-        print(f"{method.__qualname__} was called 0 times:")
-        return
-    
-    print(f"{method.__qualname__} was called {call_count} times:")
-    for inp, out in zip(inputs, outputs):
-        input_str = inp.decode("utf-8")
-        print(f"{method.__qualname__}(*{input_str}) -> {out.decode('utf-8')}")
-
-
 class Cache:
-    """Cache class using Redis"""
-    
-    def __init__(self):
-        """Initialize Redis client and flush database"""
+    """
+    Cache class to interact with a Redis database.
+    Supports storing, retrieving, counting calls, and logging I/O history.
+    """
+
+    def __init__(self) -> None:
+        """
+        Initialize the Redis client and flush the current database.
+        """
         self._redis = redis.Redis()
         self._redis.flushdb()
-    
-    @count_calls
+
     @call_history
+    @count_calls
     def store(self, data: Union[str, bytes, int, float]) -> str:
-        """Store data in Redis with random key"""
+        """
+        Generate a random key, store the given data in Redis, and return the key.
+
+        Args:
+            data (Union[str, bytes, int, float]): The data to store.
+
+        Returns:
+            str: The key under which the data was stored.
+        """
         key = str(uuid.uuid4())
         self._redis.set(key, data)
         return key
-    
-    def get(self, key: str, fn: Optional[Callable] = None) -> Union[str, bytes, int, float, None]:
-        """Get data from Redis with optional conversion"""
-        data = self._redis.get(key)
-        if data is None:
+
+    def get(self,
+            key: str,
+            fn: Optional[Callable] = None
+            ) -> Union[bytes, str, int, float, None]:
+        """
+        Retrieve the value from Redis using the given key and convert it using fn.
+
+        Args:
+            key (str): The Redis key.
+            fn (Callable, optional): A function to convert the result.
+
+        Returns:
+            Union[bytes, str, int, float, None]: The value retrieved and possibly converted.
+        """
+        value = self._redis.get(key)
+        if value is None:
             return None
-        if fn is not None:
-            return fn(data)
-        return data
-    
+        return fn(value) if fn else value
+
     def get_str(self, key: str) -> Optional[str]:
-        """Get string from Redis"""
-        return self.get(key, lambda d: d.decode("utf-8"))
-    
+        """
+        Retrieve the value from Redis and decode it from bytes to UTF-8 string.
+
+        Args:
+            key (str): The Redis key.
+
+        Returns:
+            Optional[str]: The decoded string, or None if the key doesn't exist.
+        """
+        return self.get(key, fn=lambda d: d.decode("utf-8"))
+
     def get_int(self, key: str) -> Optional[int]:
-        """Get integer from Redis"""
-        return self.get(key, int)
+        """
+        Retrieve the value from Redis and convert it to an integer.
+
+        Args:
+            key (str): The Redis key.
+
+        Returns:
+            Optional[int]: The integer value, or None if the key doesn't exist.
+        """
+        return self.get(key, fn=int)
+
+
+def replay(method: Callable) -> None:
+    """
+    Display the history of calls for a particular method.
+
+    Args:
+        method (Callable): The method whose call history is to be displayed.
+    """
+    redis_instance = method.__self__._redis
+    qualname = method.__qualname__
+
+    call_count = redis_instance.get(qualname)
+    call_count = int(call_count.decode("utf-8")) if call_count else 0
+    print(f"{qualname} was called {call_count} times:")
+
+    inputs = redis_instance.lrange(f"{qualname}:inputs", 0, -1)
+    outputs = redis_instance.lrange(f"{qualname}:outputs", 0, -1)
+
+    for inp, out in zip(inputs, outputs):
+        print(f"{qualname}(*{inp.decode('utf-8')}) -> {out.decode('utf-8')}")

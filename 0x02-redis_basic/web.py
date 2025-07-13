@@ -1,48 +1,56 @@
 #!/usr/bin/env python3
 """
-Web cache and tracker module
+Expiring web cache and tracker using Redis
 """
-import redis
+
 import requests
-from typing import Callable
+import redis
 from functools import wraps
+from typing import Callable
 
-# Initialize a single Redis client to ensure consistency
-_redis = redis.Redis(decode_responses=False)  # Keep responses as bytes
 
-def track_url_access(method: Callable) -> Callable:
-    """Decorator to track URL access count and cache results"""
+def wrapper(method: Callable) -> Callable:
+    """
+    Decorator to track URL accesses and cache results
+    """
     @wraps(method)
-    def wrapper(url: str) -> str:
-        """Wrapper function for tracking and caching"""
-        # Increment access count
+    def wrapped(url: str) -> str:
+        """
+        Wrapper function that handles caching and counting
+        """
+        # Initialize Redis connection inside wrapper
+        redis_client = redis.Redis()
+        
+        # Track URL access count
         count_key = f"count:{url}"
-        _redis.incr(count_key)
+        redis_client.incr(count_key)
         
-        # Check cache
-        cache_key = f"cache:{url}"
-        cached_content = _redis.get(cache_key)
-        
+        # Check cache first
+        cache_key = f"result:{url}"
+        cached_content = redis_client.get(cache_key)
         if cached_content:
-            return cached_content.decode("utf-8")
+            return cached_content.decode('utf-8')
         
-        # Get content and cache it
-        try:
-            content = method(url)
-            # Ensure content is stored as bytes
-            _redis.setex(cache_key, 10, content.encode("utf-8"))
-            return content
-        except requests.RequestException:
-            return ""  # Return empty string on failure
-    
-    return wrapper
+        # Get fresh content if not in cache
+        html_content = method(url)
+        
+        # Cache with 10 second expiration
+        redis_client.setex(cache_key, 10, html_content)
+        
+        return html_content
+    return wrapped
 
-@track_url_access
+
+@wrapper
 def get_page(url: str) -> str:
-    """Get HTML content of a URL"""
-    try:
-        response = requests.get(url, timeout=5)  # Add timeout for reliability
-        response.raise_for_status()  # Raise exception for bad status codes
-        return response.text
-    except requests.RequestException:
-        return ""  # Handle errors gracefully
+    """
+    Get the HTML content of a URL with caching and access tracking
+    
+    Args:
+        url: The URL to fetch content from
+        
+    Returns:
+        The HTML content as a string
+    """
+    response = requests.get(url)
+    return response.text
